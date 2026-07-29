@@ -1,0 +1,1 @@
+ALTER TABLE `sales` ADD `operation_type` text DEFAULT 'DIRECT_RESALE' NOT NULL;

@@ -1,0 +1,1 @@
+ALTER TABLE `business_partners` ADD `paca_number` text DEFAULT '' NOT NULL;

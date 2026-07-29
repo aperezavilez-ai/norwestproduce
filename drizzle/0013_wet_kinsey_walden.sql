@@ -1,0 +1,1 @@
+ALTER TABLE `company_settings` ADD `norwest_profit_percentage` real DEFAULT 16 NOT NULL;
