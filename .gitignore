@@ -46,3 +46,6 @@ tsconfig.tsbuildinfo
 /docs/
 /tests/
 /db/migrations/
+
+.vercel
+.env*

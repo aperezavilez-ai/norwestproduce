@@ -1,6 +1,6 @@
-import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
+import postgres from "postgres";
 import { del as deleteBlob, get as getBlob, put as putBlob } from "@vercel/blob";
-import { drizzle, type NeonHttpDatabase } from "drizzle-orm/neon-http";
+import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import * as schema from "./schema";
 
 type CloudflareBucket = {
@@ -15,19 +15,17 @@ declare global {
   var __NORWEST_RUNTIME_BINDINGS__: RuntimeBindings | undefined;
 }
 
-type DbClient = NeonHttpDatabase<typeof schema>;
+type DbClient = PostgresJsDatabase<typeof schema>;
 
-let queryClient: NeonQueryFunction<false, false> | undefined;
+let sqlClient: ReturnType<typeof postgres> | undefined;
 let database: DbClient | undefined;
 let initialization: Promise<void> | undefined;
 
 function databaseUrl() {
-  return process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.NEON_DATABASE_URL;
+  return process.env.DATABASE_URL || process.env.POSTGRES_URL;
 }
 
-async function initializeDatabase(sql: NeonQueryFunction<false, false>) {
-  // All tables created with their final column set — no ALTER TABLE migrations needed.
-  // To add a new column in the future: add it here and deploy; Neon handles idempotency via IF NOT EXISTS.
+async function initializeDatabase(sql: ReturnType<typeof postgres>) {
   await sql`
     CREATE TABLE IF NOT EXISTS inventory_lots (
       id SERIAL PRIMARY KEY,
@@ -244,8 +242,6 @@ async function initializeDatabase(sql: NeonQueryFunction<false, false>) {
     )
   `;
 
-  // CREATE TABLE IF NOT EXISTS does not add columns to an existing production table.
-  // Keep these upgrades idempotent until cold-start DDL is replaced by a migration job.
   await sql`ALTER TABLE inventory_lots ADD COLUMN IF NOT EXISTS load_date TEXT`;
   await sql`ALTER TABLE inventory_lots ADD COLUMN IF NOT EXISTS attachments TEXT NOT NULL DEFAULT '[]'`;
   await sql`ALTER TABLE inventory_lots ADD COLUMN IF NOT EXISTS cost_attachments TEXT NOT NULL DEFAULT '{}'`;
@@ -269,7 +265,6 @@ async function initializeDatabase(sql: NeonQueryFunction<false, false>) {
   await sql`ALTER TABLE business_partners ADD COLUMN IF NOT EXISTS buyer_office_extension TEXT NOT NULL DEFAULT ''`;
   await sql`ALTER TABLE business_partners ADD COLUMN IF NOT EXISTS buyer_mobile_phone TEXT NOT NULL DEFAULT ''`;
 
-  // Create all indexes in a single round-trip using a DO block
   await sql`
     DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'inventory_org_product_idx') THEN
@@ -325,24 +320,24 @@ async function initializeDatabase(sql: NeonQueryFunction<false, false>) {
 export async function getDb() {
   const connectionString = databaseUrl();
   if (!connectionString) {
-    throw new Error("Vercel Postgres/Neon no está conectado. Agrega DATABASE_URL al proyecto para guardar información real.");
+    throw new Error("Base de datos no configurada. Agrega DATABASE_URL al proyecto.");
   }
 
-  if (!queryClient || !database) {
-    queryClient = neon(connectionString);
-    database = drizzle(queryClient, { schema });
+  if (!sqlClient || !database) {
+    sqlClient = postgres(connectionString, { ssl: "require", max: 5 });
+    database = drizzle(sqlClient, { schema });
   }
 
-  initialization ??= initializeDatabase(queryClient);
+  initialization ??= initializeDatabase(sqlClient);
   await initialization;
   return database;
 }
 
 export async function nextInvoiceNumber(organizationCode: string) {
   await getDb();
-  if (!queryClient) throw new Error("La base de datos no esta disponible.");
+  if (!sqlClient) throw new Error("La base de datos no esta disponible.");
 
-  const rows = await queryClient`
+  const rows = await sqlClient`
     INSERT INTO document_counters (organization_code, document_type, last_value, updated_at)
     VALUES (
       ${organizationCode},
@@ -377,10 +372,10 @@ export async function nextInvoiceNumber(organizationCode: string) {
 
 export async function recordLoginAttempt(rateKey: string, windowMs: number, maxAttempts: number) {
   await getDb();
-  if (!queryClient) throw new Error("La base de datos no esta disponible.");
+  if (!sqlClient) throw new Error("La base de datos no esta disponible.");
   const now = Date.now();
   const resetAt = now + windowMs;
-  const rows = await queryClient`
+  const rows = await sqlClient`
     INSERT INTO auth_rate_limits (rate_key, attempt_count, reset_at)
     VALUES (${rateKey}, 1, ${resetAt})
     ON CONFLICT (rate_key) DO UPDATE SET
@@ -400,8 +395,8 @@ export async function recordLoginAttempt(rateKey: string, windowMs: number, maxA
 
 export async function clearLoginAttempts(rateKey: string) {
   await getDb();
-  if (!queryClient) return;
-  await queryClient`DELETE FROM auth_rate_limits WHERE rate_key = ${rateKey}`;
+  if (!sqlClient) return;
+  await sqlClient`DELETE FROM auth_rate_limits WHERE rate_key = ${rateKey}`;
 }
 
 export async function applyInventoryAdjustments(
@@ -409,24 +404,27 @@ export async function applyInventoryAdjustments(
 ) {
   if (!adjustments.length) return;
   await getDb();
-  if (!queryClient) throw new Error("La base de datos no esta disponible.");
+  if (!sqlClient) throw new Error("La base de datos no esta disponible.");
 
-  await queryClient.transaction((transaction) => adjustments.map(({ inventoryLotId, quantityDelta }) => {
-    const requiredBoxes = Math.max(0, -quantityDelta);
-    return transaction`
-      WITH adjusted AS (
-        UPDATE inventory_lots
-        SET available_boxes = available_boxes + ${quantityDelta}
-        WHERE id = ${inventoryLotId}
-          AND organization_code = 'USA'
-          AND available_boxes >= ${requiredBoxes}
-        RETURNING id
-      )
-      SELECT id FROM adjusted
-      UNION ALL
-      SELECT 1 / COUNT(*)::integer FROM adjusted HAVING COUNT(*) = 0
-    `;
-  }));
+  await sqlClient.begin(async (tx) => {
+    for (const { inventoryLotId, quantityDelta } of adjustments) {
+      const requiredBoxes = Math.max(0, -quantityDelta);
+      const result = await tx`
+        WITH adjusted AS (
+          UPDATE inventory_lots
+          SET available_boxes = available_boxes + ${quantityDelta}
+          WHERE id = ${inventoryLotId}
+            AND organization_code = 'USA'
+            AND available_boxes >= ${requiredBoxes}
+          RETURNING id
+        )
+        SELECT id FROM adjusted
+        UNION ALL
+        SELECT 1 / COUNT(*)::integer FROM adjusted HAVING COUNT(*) = 0
+      `;
+      if (!result.length) throw new Error(`Inventario insuficiente para lote ${inventoryLotId}`);
+    }
+  });
 }
 
 export function getBucket() {
