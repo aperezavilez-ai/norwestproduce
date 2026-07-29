@@ -324,7 +324,7 @@ export async function getDb() {
   }
 
   if (!sqlClient || !database) {
-    sqlClient = postgres(connectionString, { ssl: "require", max: 5 });
+    sqlClient = postgres(connectionString, { ssl: "require", max: 5, connection: { search_path: "norwestproduce" } });
     database = drizzle(sqlClient, { schema });
   }
 
