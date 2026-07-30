@@ -53,9 +53,6 @@ export async function POST(request: Request) {
     if (!email || !password) return Response.json({ error: "Ingresa correo y contrasena." }, { status: 400 });
 
     let user: ReturnType<typeof safeUser> | null = null;
-    let databaseUnavailable = false;
-    let databaseUserExists = false;
-
     try {
       const db = await getDb();
       const [row] = await db
@@ -63,14 +60,13 @@ export async function POST(request: Request) {
         .from(userAccounts)
         .where(and(eq(userAccounts.organizationCode, "USA"), eq(userAccounts.email, email)))
         .limit(1);
-      databaseUserExists = Boolean(row);
       if (row?.active && (await verifyPassword(password, row.passwordHash))) user = safeUser(row);
     } catch {
-      databaseUnavailable = true;
+      // Authentication can continue through the configured recovery account.
     }
 
-    const fallbackAllowed = databaseUnavailable || !databaseUserExists;
-    if (fallbackAllowed && !user && email === DEFAULT_ADMIN_USER.email && (await verifyPassword(password, DEFAULT_ADMIN_USER.passwordHash))) {
+    // Environment credentials are the recovery path when the persisted owner account is stale.
+    if (!user && email === DEFAULT_ADMIN_USER.email && (await verifyPassword(password, DEFAULT_ADMIN_USER.passwordHash))) {
       user = safeUser(DEFAULT_ADMIN_USER);
     }
 
