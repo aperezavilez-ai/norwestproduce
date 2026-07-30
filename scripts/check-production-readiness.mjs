@@ -12,9 +12,14 @@ if (existsSync(".env.local")) {
 
 const required = [
   {
-    name: "DATABASE_URL",
-    alternatives: ["POSTGRES_URL", "NEON_DATABASE_URL"],
-    purpose: "guardar catalogos, ventas, inventario, facturas, cartera y reportes",
+    name: "SUPABASE_URL",
+    alternatives: [],
+    purpose: "conectar por HTTPS con Supabase",
+  },
+  {
+    name: "SUPABASE_SERVICE_ROLE_KEY",
+    alternatives: [],
+    purpose: "autorizar las operaciones privadas de base de datos",
   },
   {
     name: "BLOB_READ_WRITE_TOKEN",
