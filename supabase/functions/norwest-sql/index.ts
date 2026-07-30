@@ -4,7 +4,7 @@ const databaseUrl = Deno.env.get("SUPABASE_DB_URL");
 const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 const pool = databaseUrl ? new Pool(databaseUrl, 5, true) : null;
 
-const blockedSql = /\b(create|alter|drop|truncate|grant|revoke|comment|copy|do|call|vacuum|analyze|reset|listen|notify)\b/i;
+const blockedSql = /\b(create|alter|drop|truncate|grant|revoke|comment|copy|call|vacuum|analyze|reset|listen|notify)\b/i;
 const blockedSchemas = /\b(pg_catalog|information_schema|auth|storage|vault|realtime|extensions|public)\s*\./i;
 const allowedStart = /^(select|insert|update|delete|with)\b/i;
 
