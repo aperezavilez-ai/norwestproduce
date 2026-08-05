@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, gt } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { inventoryLots } from "../../../../db/schema";
 import { requireAnyPermission, requirePermission } from "../../../../lib/api-auth";
@@ -12,7 +12,7 @@ export async function GET(request: Request) {
     const db = await getDb();
     const lots = await db.select().from(inventoryLots).where(includeAll
       ? eq(inventoryLots.organizationCode, "USA")
-      : and(eq(inventoryLots.organizationCode, "USA"), gt(inventoryLots.availableBoxes, 0), isNotNull(inventoryLots.receivedConfirmedAt)))
+      : and(eq(inventoryLots.organizationCode, "USA"), gt(inventoryLots.availableBoxes, 0)))
       .orderBy(desc(inventoryLots.receivedDate), asc(inventoryLots.product));
     return Response.json({ lots });
   } catch (error) {

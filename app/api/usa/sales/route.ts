@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { applyInventoryAdjustments, getDb } from "../../../../db";
-import { inventoryLots, sales } from "../../../../db/schema";
+import { coldStorages, inventoryLots, sales } from "../../../../db/schema";
 import { requireAnyPermission, requirePermission } from "../../../../lib/api-auth";
 import { groupInventoryAllocations, inventoryAllocationDelta, type InventoryAllocation } from "../../../../lib/inventory-allocations";
 import type { InvoiceItem, NewSale } from "../../../../lib/types";
@@ -9,17 +9,6 @@ const LOAD_STATUSES = new Set(["OK", "PAS", "POSIBLE AJUSTE", "USDA REQUESTED"])
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "No fue posible completar la operación.";
-}
-
-function currentDateInMcAllen() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${value.year}-${value.month}-${value.day}`;
 }
 
 function inventoryAllocationsFor(row: { operationType: string; inventoryLotId?: number | null; boxes: number; invoiceItems?: string | null }) {
@@ -35,6 +24,21 @@ function inventoryAllocationsFor(row: { operationType: string; inventoryLotId?: 
 }
 
 type Database = Awaited<ReturnType<typeof getDb>>;
+
+async function shipToForWarehouse(db: Database, warehouse: string) {
+  const [row] = await db.select({ city: coldStorages.city, stateCode: coldStorages.stateCode }).from(coldStorages)
+    .where(and(eq(coldStorages.organizationCode, "USA"), eq(coldStorages.name, warehouse))).limit(1);
+  return row ? [row.city, row.stateCode].filter(Boolean).join(", ") || null : null;
+}
+
+function parseHistory(value: string | null) {
+  try {
+    const parsed = JSON.parse(value || "[]") as unknown;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 async function restoreInventory(db: Database, allocations: InventoryAllocation[]) {
   void db;
@@ -123,9 +127,6 @@ export async function POST(request: Request) {
       return Response.json({ error: "Completa fecha, cliente, bodega, PU# y producto." }, { status: 400 });
     }
     const pickupDate = typeof payload.pickupDate === "string" && payload.pickupDate ? payload.pickupDate : null;
-    if (pickupDate && pickupDate < currentDateInMcAllen()) {
-      return Response.json({ error: "La fecha de pickup no puede ser anterior al día actual." }, { status: 400 });
-    }
     const dueDate = pickupDate ? new Date(new Date(`${pickupDate}T00:00:00Z`).getTime() + 21 * 86400000).toISOString().slice(0, 10) : null;
     const operationType = requestedOperationType;
     const directItems = operationType === "DIRECT_RESALE" && Array.isArray(payload.items) ? payload.items.map((item) => ({ product: String(item.product || "").trim(), presentation: item.presentation?.trim() || "", size: item.size?.trim() || "", label: item.label?.trim() || "", quantity: Number(item.quantity), purchasePrice: Number(item.purchasePrice), unitPrice: Number(item.unitPrice) })) : [];
@@ -208,6 +209,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "El inventario cambio mientras se guardaba. Revisa las cajas disponibles e intenta nuevamente." }, { status: 409 });
     }
 
+    const shipTo = await shipToForWarehouse(db, payload.warehouse.trim());
     let created: typeof sales.$inferSelect | undefined;
     try {
       [created] = await db.insert(sales).values({
@@ -230,7 +232,7 @@ export async function POST(request: Request) {
       salePrice: lineItems.length > 1 ? null : primary?.unitPrice ?? (Number.isFinite(salePrice) ? salePrice : null),
       profit,
       shipDate: payload.shipDate || null,
-      shipTo: typeof payload.shipTo === "string" ? payload.shipTo.trim() || null : null,
+      shipTo,
       pickupDate,
       total,
       dueDate,
@@ -300,9 +302,6 @@ export async function PATCH(request: Request) {
         return Response.json({ error: "Completa fecha, cliente, bodega, PU# y producto." }, { status: 400 });
       }
       const pickupDate = text(payload.pickupDate) || null;
-      if (pickupDate && pickupDate < currentDateInMcAllen()) {
-        return Response.json({ error: "La fecha de pickup no puede ser anterior al día actual." }, { status: 400 });
-      }
       const directItems = operationType === "DIRECT_RESALE" && Array.isArray(payload.items) ? (payload.items as InvoiceItem[]).map((item) => ({ product: String(item.product || "").trim(), presentation: item.presentation?.trim() || "", size: item.size?.trim() || "", label: item.label?.trim() || "", quantity: Number(item.quantity), purchasePrice: Number(item.purchasePrice), unitPrice: Number(item.unitPrice) })) : [];
       if (operationType === "DIRECT_RESALE" && (!directItems.length || directItems.length > 25 || directItems.some((item) => !item.product || !Number.isInteger(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.purchasePrice) || item.purchasePrice < 0 || !Number.isFinite(item.unitPrice) || item.unitPrice < 0))) {
         return Response.json({ error: "Revisa productos, bultos/cajas, precio de compra y precio de venta." }, { status: 400 });
@@ -399,6 +398,33 @@ export async function PATCH(request: Request) {
         return Response.json({ error: "El inventario cambió mientras se actualizaba. Revisa las cajas disponibles e intenta nuevamente." }, { status: 409 });
       }
 
+      const shipTo = await shipToForWarehouse(db, warehouse);
+      const previousItems = inventoryAllocationsFor(existing).length ? (() => {
+        try { return JSON.parse(existing.invoiceItems || "[]"); } catch { return []; }
+      })() : existing.invoiceItems ? (() => {
+        try { return JSON.parse(existing.invoiceItems); } catch { return []; }
+      })() : [{ product: existing.product, presentation: existing.presentation || "", size: existing.size || "", label: existing.label || "", quantity: existing.boxes, unitPrice: existing.salePrice || 0, purchasePrice: existing.purchasePrice ?? undefined }];
+      const fieldNames = ["saleDate", "customer", "sellerName", "purchaseOrder", "warehouse", "pickupNumber", "shipTo", "pickupDate"] as const;
+      const nextFields = { saleDate, customer, sellerName: text(payload.sellerName) || null, purchaseOrder: text(payload.purchaseOrder) || null, warehouse, pickupNumber, shipTo, pickupDate };
+      const fieldChanges = fieldNames.flatMap((field) => {
+        const before = existing[field] ?? null;
+        const after = nextFields[field] ?? null;
+        return before === after ? [] : [{ field, before, after }];
+      });
+      const editAudit = {
+        kind: "SALE_EDIT",
+        number: `EDIT-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}`,
+        createdAt: new Date().toISOString(),
+        reason: "OTRO",
+        notes: "Modificación de venta no facturada",
+        previousItems,
+        adjustedItems: lineItems.length ? lineItems : previousItems,
+        previousTotal: existing.total || 0,
+        adjustedTotal: total,
+        difference: total - Number(existing.total || 0),
+        documentType: "SIN CAMBIO",
+        fieldChanges,
+      };
       let sale: typeof sales.$inferSelect | undefined;
       try {
         [sale] = await db.update(sales).set({
@@ -419,11 +445,12 @@ export async function PATCH(request: Request) {
         salePrice: lineItems.length > 1 ? null : primary?.unitPrice ?? salePrice,
         profit,
         shipDate: null,
-        shipTo: text(payload.shipTo) || null,
+        shipTo,
         pickupDate,
         total,
         dueDate,
         invoiceItems: lineItems.length ? JSON.stringify(lineItems) : null,
+        invoiceAdjustments: JSON.stringify([...parseHistory(existing.invoiceAdjustments), editAudit]),
         }).where(and(eq(sales.id, id), eq(sales.organizationCode, "USA"), isNull(sales.invoiceNumber))).returning();
       } catch (error) {
         await applyInventoryAdjustments(inventoryChanges.map((change) => ({
@@ -500,13 +527,28 @@ export async function PATCH(request: Request) {
       return Response.json({ sale });
     }
     const pickupDate = typeof payload.pickupDate === "string" && payload.pickupDate ? payload.pickupDate : null;
-    if (pickupDate && pickupDate < currentDateInMcAllen()) {
-      return Response.json({ error: "La fecha de pickup no puede ser anterior al día actual." }, { status: 400 });
-    }
     const dueDate = pickupDate ? new Date(new Date(`${pickupDate}T00:00:00Z`).getTime() + 21 * 86400000).toISOString().slice(0, 10) : null;
     const db = await getDb();
-    const [sale] = await db.update(sales).set({ pickupDate, dueDate })
-      .where(and(eq(sales.id, id), eq(sales.organizationCode, "USA"), isNull(sales.canceledAt))).returning();
+    const [existing] = await db.select().from(sales).where(and(eq(sales.id, id), eq(sales.organizationCode, "USA"))).limit(1);
+    if (!existing) return Response.json({ error: "No se encontró la venta." }, { status: 404 });
+    if (existing.canceledAt) return Response.json({ error: "Una venta cancelada no puede modificarse." }, { status: 409 });
+    if (existing.invoiceNumber) return Response.json({ error: "Una venta facturada ya no puede modificarse." }, { status: 409 });
+    const pickupAudit = {
+      kind: "SALE_EDIT",
+      number: `EDIT-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}`,
+      createdAt: new Date().toISOString(),
+      reason: "OTRO",
+      notes: "Modificación de fecha de pickup",
+      previousItems: [],
+      adjustedItems: [],
+      previousTotal: existing.total || 0,
+      adjustedTotal: existing.total || 0,
+      difference: 0,
+      documentType: "SIN CAMBIO",
+      fieldChanges: [{ field: "pickupDate", before: existing.pickupDate, after: pickupDate }],
+    };
+    const [sale] = await db.update(sales).set({ pickupDate, dueDate, invoiceAdjustments: JSON.stringify([...parseHistory(existing.invoiceAdjustments), pickupAudit]) })
+      .where(and(eq(sales.id, id), eq(sales.organizationCode, "USA"), isNull(sales.canceledAt), isNull(sales.invoiceNumber))).returning();
     if (!sale) return Response.json({ error: "No se encontró la venta." }, { status: 404 });
     return Response.json({ sale });
   } catch (error) {

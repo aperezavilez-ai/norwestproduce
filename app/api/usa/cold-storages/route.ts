@@ -1,6 +1,6 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, or } from "drizzle-orm";
 import { getDb } from "../../../../db";
-import { coldStorages } from "../../../../db/schema";
+import { coldStorages, inventoryLots, sales } from "../../../../db/schema";
 import { requirePermission } from "../../../../lib/api-auth";
 import { clean } from "../../../../lib/auth";
 
@@ -73,5 +73,29 @@ export async function PATCH(request: Request) {
     return Response.json({ coldStorage });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "No fue posible actualizar la bodega." }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  const denied = requirePermission(request, "catalogs");
+  if (denied) return denied;
+  try {
+    const id = Number(new URL(request.url).searchParams.get("id"));
+    if (!Number.isInteger(id) || id <= 0) return Response.json({ error: "Bodega no válida." }, { status: 400 });
+    const db = await getDb();
+    const [coldStorage] = await db.select().from(coldStorages)
+      .where(and(eq(coldStorages.id, id), eq(coldStorages.organizationCode, "USA"))).limit(1);
+    if (!coldStorage) return Response.json({ error: "Bodega no encontrada." }, { status: 404 });
+    const [saleReference, inventoryReference] = await Promise.all([
+      db.select({ id: sales.id }).from(sales).where(and(eq(sales.organizationCode, "USA"), eq(sales.warehouse, coldStorage.name))).limit(1),
+      db.select({ id: inventoryLots.id }).from(inventoryLots).where(and(eq(inventoryLots.organizationCode, "USA"), or(eq(inventoryLots.warehouse, coldStorage.name), eq(inventoryLots.coldStorage, coldStorage.name)))).limit(1),
+    ]);
+    if (saleReference.length || inventoryReference.length) {
+      return Response.json({ error: "No se puede eliminar porque la bodega tiene ventas o inventario relacionado." }, { status: 409 });
+    }
+    await db.delete(coldStorages).where(and(eq(coldStorages.id, id), eq(coldStorages.organizationCode, "USA")));
+    return Response.json({ deletedId: id });
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : "No fue posible eliminar la bodega." }, { status: 500 });
   }
 }

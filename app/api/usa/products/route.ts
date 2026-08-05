@@ -1,6 +1,6 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, ilike, or } from "drizzle-orm";
 import { getDb } from "../../../../db";
-import { products } from "../../../../db/schema";
+import { inventoryLots, products, sales } from "../../../../db/schema";
 import { requirePermission } from "../../../../lib/api-auth";
 import { clean } from "../../../../lib/auth";
 
@@ -50,5 +50,29 @@ export async function POST(request: Request) {
     return Response.json({ product }, { status: 201 });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "No fue posible guardar el producto." }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  const denied = requirePermission(request, "catalogs");
+  if (denied) return denied;
+  try {
+    const id = Number(new URL(request.url).searchParams.get("id"));
+    if (!Number.isInteger(id) || id <= 0) return Response.json({ error: "Producto no válido." }, { status: 400 });
+    const db = await getDb();
+    const [product] = await db.select().from(products)
+      .where(and(eq(products.id, id), eq(products.organizationCode, "USA"))).limit(1);
+    if (!product) return Response.json({ error: "Producto no encontrado." }, { status: 404 });
+    const [saleReference, inventoryReference] = await Promise.all([
+      db.select({ id: sales.id }).from(sales).where(and(eq(sales.organizationCode, "USA"), or(eq(sales.product, product.name), ilike(sales.invoiceItems, `%\"product\":\"${product.name.replace(/[\\%_]/g, "\\$&")}\"%`)))).limit(1),
+      db.select({ id: inventoryLots.id }).from(inventoryLots).where(and(eq(inventoryLots.organizationCode, "USA"), eq(inventoryLots.product, product.name))).limit(1),
+    ]);
+    if (saleReference.length || inventoryReference.length) {
+      return Response.json({ error: "No se puede eliminar porque el producto tiene ventas o inventario relacionado." }, { status: 409 });
+    }
+    await db.delete(products).where(and(eq(products.id, id), eq(products.organizationCode, "USA")));
+    return Response.json({ deletedId: id });
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : "No fue posible eliminar el producto." }, { status: 500 });
   }
 }

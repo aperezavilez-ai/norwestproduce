@@ -49,6 +49,7 @@ export type Sale = {
 };
 
 export type InvoiceAdjustment = {
+  kind?: "INVOICE_ADJUSTMENT" | "SALE_EDIT";
   number: string;
   createdAt: string;
   reason: "CAMBIO DE PRECIO" | "CALIDAD" | "RECHAZO PARCIAL" | "PRODUCTO ELIMINADO" | "CARGA POR ERROR" | "OTRO";
@@ -60,6 +61,7 @@ export type InvoiceAdjustment = {
   adjustedTotal: number;
   difference: number;
   documentType: "NOTA DE CREDITO" | "NOTA DE DEBITO" | "SIN CAMBIO";
+  fieldChanges?: Array<{ field: string; before: string | number | null; after: string | number | null }>;
 };
 
 export type InvoiceItem = {
