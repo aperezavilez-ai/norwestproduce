@@ -12,7 +12,7 @@
     "build": "bash scripts/build-verified.sh",
     "build:vercel": "next build",
     "typecheck": "tsc --noEmit",
-    "test:unit": "node --test tests/seller-profit.test.mjs tests/operational-integrity.test.mjs tests/catalog-sales-regressions.test.mjs",
+    "test:unit": "node --test tests/seller-profit.test.mjs tests/operational-integrity.test.mjs tests/catalog-sales-regressions.test.mjs tests/norwest-change-regressions.test.mjs",
     "verify": "pnpm run typecheck && pnpm exec next build && pnpm run test:unit",
     "ops:check": "node scripts/check-production-readiness.mjs",
     "preview:local": "node scripts/local-preview.mjs",

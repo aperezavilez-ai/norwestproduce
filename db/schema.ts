@@ -226,6 +226,26 @@ export const sellerLiquidations = pgTable(
   ],
 );
 
+export const customerPayments = pgTable(
+  "customer_payments",
+  {
+    id: serial("id").primaryKey(),
+    organizationCode: text("organization_code").notNull().default("USA"),
+    saleId: integer("sale_id").notNull().references(() => sales.id),
+    customer: text("customer").notNull(),
+    paymentDate: text("payment_date").notNull(),
+    amount: doublePrecision("amount").notNull(),
+    method: text("method").notNull().default("OTRO"),
+    reference: text("reference"),
+    notes: text("notes"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP::text`),
+  },
+  (table) => [
+    index("customer_payments_org_sale_idx").on(table.organizationCode, table.saleId),
+    index("customer_payments_org_date_idx").on(table.organizationCode, table.paymentDate),
+  ],
+);
+
 export const documentCounters = pgTable(
   "document_counters",
   {

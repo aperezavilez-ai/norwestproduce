@@ -3,8 +3,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, Fragment, KeyboardEvent, useEffect, useMemo, useState } from "react";
-import type { BusinessPartner, ColdStorage, CompanySettings, InventoryLot, InvoiceAdjustment, InvoiceItem, PartnerType, Product, Sale, SellerLiquidation, UserAccount } from "../../lib/types";
+import { FormEvent, Fragment, KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
+import type { BusinessPartner, ColdStorage, CompanySettings, CustomerPayment, InventoryLot, InvoiceAdjustment, InvoiceItem, PartnerType, Product, Sale, SellerLiquidation, UserAccount } from "../../lib/types";
 import { calculateSellerProfitAllocations, normalizeSellerName } from "../../lib/seller-profit";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
@@ -17,7 +17,7 @@ const documentDate = new Intl.DateTimeFormat("en-US", { month: "2-digit", day: "
 const SALES_ORDER_TERMS = "The perishable agricultural commodities listed on this invoice are sold subject to the statutory trust authorized by section 5(c) of the Perishable Agricultural Commodities Act, 1930 (7 U.S.C. 499e(c)). The seller of these commodities retains a trust claim over these commodities, all inventories of food or other products derived from these commodities, and any receivables or proceeds from the sale of these commodities until full payment is received. All claims must be supported by USDA Inspection Certificate. The tomatoes shipped under this bill of lading and sold pursuant to this invoice are subject to: 1) the 2019 Suspension Agreement between the United States Department of Commerce and certain tomato growers; 2) any subsequent amendments, clarifications or modifications thereof; and 3) certain letter agreements between yourselves and ourselves regarding the same, each of which is incorporated by this reference as if fully set forth herein. Copies of said agreements will be sent to you upon request. Failure to abide by these terms constitutes a violation of Section 2 of the PACA (7 U.S.C. §499b) and may subject the violator to disciplinary proceedings. Notice to subsequent purchaser or re-packer. These articles are imported. The requirements of 19 U.S.C. §1304 and 19 C.F.R. Part 134 provide that the articles or their containers must be marked in a conspicuous place as legibly, indelibly and permanently as the nature of the article or container will permit, in such a manner as to indicate to an ultimate purchaser in the United States, the English name of the country of origin of the articles. After payment is due, interest will accrue on unpaid balances at a rate of 18% per annum (1.5% per month) until paid. In the event a legal or other action is commenced to collect sums due under this invoice, the prevailing party shall be entitled to reimbursement of all costs and fees including reasonable attorney’s fees incurred. With the exception of tomatoes, which are covered by the Suspension Agreement, any variance noted by the receiver as to quantity, or price disparity must be brought to seller’s attention within 24 hours after the receipt of the merchandise. No adjustments on the above items will be honored unless seller is notified as herein stated.";
 const INVOICE_TERMS = "Good Delivery Standars. Any claims for quality must be made within 24 hours of arrival at destination and must be supported with a timely federal inspection fo the complete lot in question. We reserve the right to deny credit. Negotiated under P.A.C.A. terms. INTEREST WILL ACCRUE ON ANY PAST BALANCE AT THE RATE OF 1.5% PER MONTH (18% PER ANNUM.) The perishable agricultural commodities listed on this invoice are sold subject to the statutory trust authorized by section 5(c) of the Perishable Agricultural Commodities Act, 1930 (7 U.S.C. 499e(c)). The seller of these commodities retains a trust claim over these commodities, all inventories of food or other products derived from these commodities, and any receivables or proceeds from the sale of these commodities until full payment is received. All claims must be supported by USDA Inspection Certificate. The tomatoes shipped under this bill of lading and sold pursuant to this invoice are subject to: 1) the 2019 Suspension Agreement between the United States Department of Commerce and certain tomato growers; 2) any subsequent amendments, clarifications or modifications thereof; and 3) certain letter agreements between yourselves and ourselves regarding the same, each of which is incorporated by this reference as if fully set forth herein. Copies of said agreements will be sent to you upon request. Failure to abide by these terms constitutes a violation of Section 2 of the PACA (7 U.S.C. §499b) and may subject the violator to disciplinary proceedings. Notice to subsequent purchaser or re-packer. These articles are imported. The requirements of 19 U.S.C. §1304 and 19 C.F.R. Part 134 provide that the articles or their containers must be marked in a conspicuous place as legibly, indelibly and permanently as the nature of the article or container will permit, in such a manner as to indicate to an ultimate purchaser in the United States, the English name of the country of origin of the articles. After payment is due, interest will accrue on unpaid balances at a rate of 18% per annum (1.5% per month) until paid. In the event a legal or other action is commenced to collect sums due under this invoice, the prevailing party shall be entitled to reimbursement of all costs and fees including reasonable attorney’s fees incurred. With the exception of tomatoes, which are covered by the Suspension Agreement, any variance noted by the receiver as to quantity, or price disparity must be brought to seller’s attention within 24 hours after the receipt of the merchandise. No adjustments on the above items will be honored unless seller is notified as herein stated.";
 type Operation = "DIRECT_RESALE" | "IMPORTED_INVENTORY";
-type Section = "dashboard" | "catalogs" | "inventory" | "importQuote" | "invoicing" | "collections" | "reports" | "administration" | "settings";
+type Section = "dashboard" | "catalogs" | "inventory" | "importQuote" | "invoicing" | "collections" | "accounting" | "reports" | "administration" | "settings";
 type CollectionFilter = "TODAS" | "VIGENTES" | "VENCIDAS" | "PAGADAS";
 type ReportTab = "sales" | "inventory" | "collections" | "profit" | "importProfit" | "sellerProfit" | "salesByCustomer" | "salesDetailCustomer" | "salesBySeller" | "salesDetailSeller" | "salesByProduct" | "salesDetailProduct" | "salesByImportInvoice" | "salesDetailImportInvoice" | "adjustments";
 type CatalogType = PartnerType | "WAREHOUSE" | "PRODUCT";
@@ -336,6 +336,10 @@ export default function UsaDashboard({ initialSales = [] }: { initialSales?: Sal
   const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>("TODAS");
   const [collectionCustomer, setCollectionCustomer] = useState("");
   const [statementCustomer, setStatementCustomer] = useState<string | null>(null);
+  const [customerPayments, setCustomerPayments] = useState<CustomerPayment[]>([]);
+  const [accountingSale, setAccountingSale] = useState<Sale | null>(null);
+  const [paymentForm, setPaymentForm] = useState({ paymentDate: localDateKey(), amount: "", method: "ACH", reference: "", notes: "" });
+  const [paymentSaveState, setPaymentSaveState] = useState("");
   const [reportTab, setReportTab] = useState<ReportTab>("sales");
   const [reportQuery, setReportQuery] = useState("");
   const [reportFromDate, setReportFromDate] = useState("");
@@ -429,6 +433,16 @@ export default function UsaDashboard({ initialSales = [] }: { initialSales?: Sal
   const [settingsAuthOpen, setSettingsAuthOpen] = useState(false);
   const [settingsCredentials, setSettingsCredentials] = useState({ email: "", password: "" });
   const [settingsAuthState, setSettingsAuthState] = useState("");
+
+  async function loadCustomerPayments() {
+    try {
+      const response = await fetch("/api/usa/customer-payments");
+      const data = await response.json();
+      if (Array.isArray(data.payments)) setCustomerPayments(data.payments);
+    } catch {
+      setCustomerPayments([]);
+    }
+  }
 
   useEffect(() => {
     fetch("/api/usa/sales").then((response) => response.ok ? response.json() : Promise.reject()).then((data) => {
@@ -529,6 +543,43 @@ export default function UsaDashboard({ initialSales = [] }: { initialSales?: Sal
       if (Array.isArray(data.liquidations)) setSellerLiquidations(data.liquidations);
     } catch {
       setSellerLiquidations([]);
+    }
+  }
+
+  function openAccounting() {
+    setSection("accounting");
+    setPaymentSaveState("");
+    void Promise.all([loadPartners(), loadCustomerPayments()]);
+  }
+
+  const paidForSale = useCallback((sale: Sale) => {
+    return customerPayments.filter((payment) => payment.saleId === sale.id).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  }, [customerPayments]);
+
+  const balanceForSale = useCallback((sale: Sale) => {
+    return Math.max(0, (sale.total ?? 0) - paidForSale(sale));
+  }, [paidForSale]);
+
+  function openPaymentForm(sale: Sale) {
+    setAccountingSale(sale);
+    setPaymentForm({ paymentDate: localDateKey(), amount: balanceForSale(sale).toFixed(5), method: "ACH", reference: "", notes: "" });
+    setPaymentSaveState("");
+  }
+
+  async function saveCustomerPayment(event: FormEvent) {
+    event.preventDefault();
+    if (!accountingSale?.id) return;
+    setPaymentSaveState("Guardando pago...");
+    try {
+      const response = await fetch("/api/usa/customer-payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...paymentForm, saleId: accountingSale.id }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "No se pudo registrar el pago.");
+      if (data.payment) setCustomerPayments((current) => [data.payment, ...current]);
+      if (data.sale) setSalesRows((current) => current.map((sale) => sale.id === data.sale.id ? data.sale : sale));
+      setAccountingSale(null);
+      setPaymentSaveState("Pago registrado correctamente.");
+    } catch (error) {
+      setPaymentSaveState(error instanceof Error ? error.message : "No se pudo registrar el pago.");
     }
   }
 
@@ -1057,7 +1108,7 @@ export default function UsaDashboard({ initialSales = [] }: { initialSales?: Sal
   }
 
   function moneyField(value: string | number | undefined, onChange: (value: string) => void, required = false, disabled = false) {
-    return <span className="dollar-input"><span>$</span><input disabled={disabled} required={required} min="0" step="0.01" type="number" value={value ?? ""} onChange={(event) => onChange(event.target.value)} /></span>;
+    return <span className="dollar-input"><span>$</span><input disabled={disabled} required={required} min="0" step="0.00001" type="number" value={value ?? ""} onChange={(event) => onChange(event.target.value)} /></span>;
   }
 
   function moveToNextField(event: KeyboardEvent<HTMLFormElement>) {
@@ -1840,12 +1891,12 @@ export default function UsaDashboard({ initialSales = [] }: { initialSales?: Sal
     return {
       rows,
       customers: Array.from(new Set(pending.map((row) => row.customer))).sort((a, b) => a.localeCompare(b)),
-      total: pending.reduce((sum, row) => sum + (row.total ?? 0), 0),
-      current: pending.filter((row) => collectionStatus(row) === "VIGENTES").reduce((sum, row) => sum + (row.total ?? 0), 0),
-      overdue: overdue.reduce((sum, row) => sum + (row.total ?? 0), 0),
-      over90: overdue.filter((row) => overdueDays(row.dueDate) > 90).reduce((sum, row) => sum + (row.total ?? 0), 0),
+      total: pending.reduce((sum, row) => sum + balanceForSale(row), 0),
+      current: pending.filter((row) => collectionStatus(row) === "VIGENTES").reduce((sum, row) => sum + balanceForSale(row), 0),
+      overdue: overdue.reduce((sum, row) => sum + balanceForSale(row), 0),
+      over90: overdue.filter((row) => overdueDays(row.dueDate) > 90).reduce((sum, row) => sum + balanceForSale(row), 0),
     };
-  }, [salesRows, collectionFilter, collectionCustomer, collectionQuery]);
+  }, [salesRows, balanceForSale, collectionFilter, collectionCustomer, collectionQuery]);
 
   const reportSearch = reportQuery.trim().toLocaleLowerCase();
   const matchesReportDate = (value: string | null | undefined) => {
@@ -2081,10 +2132,10 @@ export default function UsaDashboard({ initialSales = [] }: { initialSales?: Sal
       .forEach((row) => {
         const key = `${row.customer}::${row.invoiceNumber}`;
         const existing = grouped.get(key);
-        grouped.set(key, existing ? { ...existing, total: (existing.total ?? 0) + (row.total ?? 0) } : { ...row });
+        grouped.set(key, existing ? { ...existing, total: (existing.total ?? 0) + balanceForSale(row) } : { ...row, total: balanceForSale(row) });
       });
     return Array.from(grouped.values()).sort((a, b) => (a.dueDate || "9999-12-31").localeCompare(b.dueDate || "9999-12-31"));
-  }, [salesRows, statementCustomer]);
+  }, [salesRows, balanceForSale, statementCustomer]);
 
   const inventoryItemsTotalBoxes = useMemo(() => inventoryItems.reduce((sum, item) => sum + (Number(item.totalBoxes) || 0), 0), [inventoryItems]);
 
@@ -2207,7 +2258,7 @@ export default function UsaDashboard({ initialSales = [] }: { initialSales?: Sal
 
   async function saveSale(event: FormEvent) {
     event.preventDefault();
-    if (form.pickupDate && form.pickupDate < localDateKey()) {
+    if (!editingSale && form.pickupDate && form.pickupDate < localDateKey()) {
       setSaveState("La fecha de pickup no puede ser anterior al dia actual.");
       return;
     }
@@ -2220,11 +2271,11 @@ export default function UsaDashboard({ initialSales = [] }: { initialSales?: Sal
         setSaveState("Selecciona una factura y captura las cajas y precio de venta de cada producto.");
         return;
       }
-      const belowCost = saleLineItems.find((item) => Number(item.unitPrice) < Number(item.purchasePrice ?? 0));
-      if (belowCost) {
-        setSaveState(`El precio de ${belowCost.product} esta por debajo del costo. Modifica el precio desde el detalle de la factura.`);
-        return;
-      }
+    }
+    const belowCost = saleLineItems.find((item) => Number(item.unitPrice) < Number(item.purchasePrice ?? 0));
+    if (belowCost && !window.confirm(`El precio de ${belowCost.product} está por debajo del costo de compra. ¿Deseas continuar con la venta?`)) {
+      setSaveState("Operación cancelada. El precio está por debajo del costo.");
+      return;
     }
     const firstLine = saleLineItems[0];
     const lineBoxes = saleLineItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
@@ -2257,7 +2308,7 @@ export default function UsaDashboard({ initialSales = [] }: { initialSales?: Sal
   }
 
   function costInput(label: string, key: CostKey) {
-    return <div className="cost-field"><span className="cost-field-label">{label}</span><span className="money-entry money-entry-with-clip"><span className="dollar-input"><span>$</span><input min="0" step="0.01" type="number" value={inventoryForm[key]} onChange={(e) => setInventoryForm({ ...inventoryForm, [key]: e.target.value })} /></span><select aria-label={`Moneda de ${label}`} value={costCurrencies[key]} onChange={(e) => setCostCurrencies({ ...costCurrencies, [key]: e.target.value as Currency })}><option value="USD">USD</option><option value="MXN">MXN</option></select><label className="clip-upload" title={`Adjuntar documentos de ${label}`}><input type="file" multiple onChange={(event) => addCostAttachments(key, event.target.files)} /><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 12.8l5.9-5.9a3.1 3.1 0 014.4 4.4l-7.7 7.7a5 5 0 01-7.1-7.1l8.2-8.2a6.8 6.8 0 019.6 9.6l-8.2 8.2" /></svg></label></span>{Boolean(inventoryForm.costAttachments[key]?.length) && <small className="attachment-list">{inventoryForm.costAttachments[key].join(", ")}</small>}</div>;
+    return <div className="cost-field"><span className="cost-field-label">{label}</span><span className="money-entry money-entry-with-clip"><span className="dollar-input"><span>$</span><input min="0" step="0.00001" type="number" value={inventoryForm[key]} onChange={(e) => setInventoryForm({ ...inventoryForm, [key]: e.target.value })} /></span><select aria-label={`Moneda de ${label}`} value={costCurrencies[key]} onChange={(e) => setCostCurrencies({ ...costCurrencies, [key]: e.target.value as Currency })}><option value="USD">USD</option><option value="MXN">MXN</option></select><label className="clip-upload" title={`Adjuntar documentos de ${label}`}><input type="file" multiple onChange={(event) => addCostAttachments(key, event.target.files)} /><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 12.8l5.9-5.9a3.1 3.1 0 014.4 4.4l-7.7 7.7a5 5 0 019.6 9.6l-8.2 8.2" /></svg></label></span>{Boolean(inventoryForm.costAttachments[key]?.length) && <small className="attachment-list">{inventoryForm.costAttachments[key].join(", ")}</small>}</div>;
   }
 
   return (
@@ -2268,7 +2319,7 @@ export default function UsaDashboard({ initialSales = [] }: { initialSales?: Sal
           <button className={`nav-item ${section === "dashboard" ? "active" : ""}`} onClick={() => setSection("dashboard")}><span>▦</span> Inicio</button>
           <button className={`nav-item ${section === "inventory" ? "active" : ""}`} onClick={() => void openInventorySection()}><span>▤</span> Inventario importado</button>
           <button className={`nav-item ${section === "importQuote" ? "active" : ""}`} onClick={() => setSection("importQuote")}><span>$</span> Cotización para Importar</button>
-          <button className={`nav-item ${section === "invoicing" ? "active" : ""}`} onClick={() => openInvoicing()}><span>□</span> Facturación</button><button className={`nav-item ${section === "collections" ? "active" : ""}`} onClick={() => { setSection("collections"); void loadPartners(); }}><span>◎</span> Cartera</button><button className={`nav-item ${section === "catalogs" ? "active" : ""}`} onClick={() => void openCatalogs()}><span>◇</span> Catálogos</button><button className={`nav-item ${section === "reports" ? "active" : ""}`} onClick={openReports}><span>⌁</span> Reportes</button><button className={`nav-item ${section === "administration" ? "active" : ""}`} onClick={openAdministration}><span>▣</span> Administración</button><button className={`nav-item ${section === "settings" ? "active" : ""}`} onClick={openSettings}><span>⚙</span> Configuración</button>
+          <button className={`nav-item ${section === "invoicing" ? "active" : ""}`} onClick={() => openInvoicing()}><span>□</span> Facturación</button><button className={`nav-item ${section === "collections" ? "active" : ""}`} onClick={() => { setSection("collections"); void Promise.all([loadPartners(), loadCustomerPayments()]); }}><span>◎</span> Cartera</button><button className={`nav-item ${section === "accounting" ? "active" : ""}`} onClick={openAccounting}><span>$</span> Contabilidad</button><button className={`nav-item ${section === "catalogs" ? "active" : ""}`} onClick={() => void openCatalogs()}><span>◇</span> Catálogos</button><button className={`nav-item ${section === "reports" ? "active" : ""}`} onClick={openReports}><span>⌁</span> Reportes</button><button className={`nav-item ${section === "administration" ? "active" : ""}`} onClick={openAdministration}><span>▣</span> Administración</button><button className={`nav-item ${section === "settings" ? "active" : ""}`} onClick={openSettings}><span>⚙</span> Configuración</button>
         </nav>
         <div className="sidebar-bottom">
           <div className="operation-pill"><span>USA</span><div><strong>Norwest Produce LLC</strong><small>Operación activa</small></div></div>
@@ -2440,9 +2491,25 @@ export default function UsaDashboard({ initialSales = [] }: { initialSales?: Sal
           <div className="panel-heading"><div><h2>Cuentas por cobrar</h2><p>Facturas, vencimientos y antigüedad de saldos.</p></div><span className="record-count">{collectionData.rows.length} {collectionData.rows.length === 1 ? "factura" : "facturas"}</span></div>
           <div className="statement-customer-bar"><label><span>Cliente para Statement</span><select value={collectionCustomer} onChange={(event) => { setCollectionCustomer(event.target.value); setCollectionFilter(event.target.value ? "TODAS" : collectionFilter); }}><option value="">Todos los clientes</option>{collectionData.customers.map((customer) => <option key={customer} value={customer}>{customer}</option>)}</select></label><button type="button" className="primary-button" disabled={!collectionCustomer} onClick={() => setStatementCustomer(collectionCustomer)}>Generar Statement PDF</button></div>
           <div className="filters collections-filters"><label className="search-box"><span>⌕</span><input value={collectionQuery} onChange={(event) => setCollectionQuery(event.target.value)} placeholder="Buscar cliente, factura, PO# o pickup" /></label><div className="collection-filter-buttons">{(["TODAS", "VIGENTES", "VENCIDAS", "PAGADAS"] as CollectionFilter[]).map((filter) => <button type="button" className={collectionFilter === filter ? "active" : ""} key={filter} onClick={() => setCollectionFilter(filter)}>{filter === "TODAS" ? "Todas" : filter.charAt(0) + filter.slice(1).toLocaleLowerCase()}</button>)}</div></div>
-          <div className="table-wrap collections-table"><table><thead><tr><th>Factura</th><th>Cliente</th><th>Fecha</th><th>Vencimiento</th><th>Antigüedad</th><th>Estatus</th><th className="numeric">Saldo</th><th></th></tr></thead><tbody>{collectionData.rows.map((row) => { const status = collectionStatus(row); const days = overdueDays(row.dueDate); return <tr key={row.id}><td><strong>#{row.invoiceNumber}</strong><small>Pickup #{row.pickupNumber}</small></td><td><strong>{row.customer}</strong><small>PO# {row.purchaseOrder || "N/A"}</small></td><td>{formatDate(row.saleDate)}</td><td>{formatDate(row.dueDate)}</td><td><span className={`aging-chip ${days > 90 ? "critical" : days ? "overdue" : "current"}`}>{agingLabel(row)}</span></td><td><span className={`collection-status ${status.toLocaleLowerCase()}`}>{status === "PAGADAS" ? "Pagada" : status === "VENCIDAS" ? "Vencida" : "Vigente"}</span></td><td className="numeric strong-number">{money.format(status === "PAGADAS" ? 0 : row.total ?? 0)}</td><td><button type="button" className="edit-button" onClick={() => openInvoicePreview(row)}>Ver factura</button></td></tr>; })}</tbody></table></div>
+          <div className="table-wrap collections-table"><table><thead><tr><th>Factura</th><th>Cliente</th><th>Fecha</th><th>Vencimiento</th><th>Antigüedad</th><th>Estatus</th><th className="numeric">Saldo</th><th></th></tr></thead><tbody>{collectionData.rows.map((row) => { const status = collectionStatus(row); const days = overdueDays(row.dueDate); return <tr key={row.id}><td><strong>#{row.invoiceNumber}</strong><small>Pickup #{row.pickupNumber}</small></td><td><strong>{row.customer}</strong><small>PO# {row.purchaseOrder || "N/A"}</small></td><td>{formatDate(row.saleDate)}</td><td>{formatDate(row.dueDate)}</td><td><span className={`aging-chip ${days > 90 ? "critical" : days ? "overdue" : "current"}`}>{agingLabel(row)}</span></td><td><span className={`collection-status ${status.toLocaleLowerCase()}`}>{status === "PAGADAS" ? "Pagada" : status === "VENCIDAS" ? "Vencida" : "Vigente"}</span></td><td className="numeric strong-number">{money.format(balanceForSale(row))}</td><td><button type="button" className="edit-button" onClick={() => openInvoicePreview(row)}>Ver factura</button></td></tr>; })}</tbody></table></div>
           {collectionData.rows.length === 0 && <div className="catalog-empty"><strong>No hay facturas en esta vista</strong><span>Cambia el filtro o genera una factura para que aparezca en cartera.</span></div>}
         </section>
+      </section>}
+
+      {section === "accounting" && <section className="erp-content">
+        <header className="topbar"><div><p className="eyebrow">Norwest Produce LLC · USA</p><h1>Contabilidad</h1></div></header>
+        <section className="summary-grid collections-summary">
+          <article className="metric-card accent-green"><div className="metric-icon">$</div><p>Total cobrado</p><strong>{money.format(customerPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0))}</strong><span>Pagos registrados de clientes</span></article>
+          <article className="metric-card accent-blue"><div className="metric-icon">□</div><p>Facturas abiertas</p><strong>{number.format(salesRows.filter((sale) => sale.invoiceNumber && !sale.canceledAt && balanceForSale(sale) > 0).length)}</strong><span>Con saldo pendiente</span></article>
+          <article className="metric-card accent-gold"><div className="metric-icon">!</div><p>Saldo pendiente</p><strong>{money.format(salesRows.filter((sale) => sale.invoiceNumber && !sale.canceledAt).reduce((sum, sale) => sum + balanceForSale(sale), 0))}</strong><span>Después de aplicar pagos</span></article>
+        </section>
+        <section className="sales-panel collections-panel">
+          <div className="panel-heading"><div><h2>Registrar pago de cliente</h2><p>Los abonos se aplican a una factura y reducen su saldo pendiente.</p></div></div>
+          <div className="statement-customer-bar"><label><span>Factura</span><select value={accountingSale?.id || ""} onChange={(event) => { const sale = salesRows.find((item) => String(item.id) === event.target.value); if (sale) openPaymentForm(sale); else setAccountingSale(null); }}><option value="">Selecciona una factura</option>{salesRows.filter((sale) => sale.invoiceNumber && !sale.canceledAt && balanceForSale(sale) > 0).map((sale) => <option key={sale.id} value={sale.id}>#{sale.invoiceNumber} · {sale.customer} · {money.format(balanceForSale(sale))}</option>)}</select></label>{accountingSale && <form className="inline-payment-form" onSubmit={saveCustomerPayment}><label>Fecha<input required type="date" value={paymentForm.paymentDate} onChange={(event) => setPaymentForm({ ...paymentForm, paymentDate: event.target.value })} /></label><label>Monto{moneyField(paymentForm.amount, (value) => setPaymentForm({ ...paymentForm, amount: value }), true)}</label><label>Método<select value={paymentForm.method} onChange={(event) => setPaymentForm({ ...paymentForm, method: event.target.value })}><option value="ACH">ACH</option><option value="WIRE">Wire</option><option value="CHECK">Cheque</option><option value="CASH">Efectivo</option><option value="CARD">Tarjeta</option><option value="OTRO">Otro</option></select></label><label>Referencia<input value={paymentForm.reference} onChange={(event) => setPaymentForm({ ...paymentForm, reference: event.target.value })} /></label><label>Notas<input value={paymentForm.notes} onChange={(event) => setPaymentForm({ ...paymentForm, notes: event.target.value })} /></label><button type="submit" className="primary-button">Registrar pago</button></form>}</div>
+          {paymentSaveState && <p className="form-message">{paymentSaveState}</p>}
+        </section>
+        <section className="sales-panel collections-panel"><div className="panel-heading"><div><h2>Facturas y saldos</h2><p>Consulta el total, los pagos aplicados y el saldo real.</p></div></div><div className="table-wrap collections-table"><table><thead><tr><th>Factura</th><th>Cliente</th><th>Total</th><th>Pagado</th><th>Saldo</th><th>Estatus</th><th></th></tr></thead><tbody>{salesRows.filter((sale) => sale.invoiceNumber && !sale.canceledAt).map((sale) => <tr key={sale.id}><td><strong>#{sale.invoiceNumber}</strong><small>{formatDate(sale.saleDate)}</small></td><td>{sale.customer}</td><td className="numeric">{money.format(sale.total || 0)}</td><td className="numeric">{money.format(paidForSale(sale))}</td><td className="numeric strong-number">{money.format(balanceForSale(sale))}</td><td>{balanceForSale(sale) <= 0.005 ? "Pagada" : "Pendiente"}</td><td><button type="button" className="edit-button" disabled={balanceForSale(sale) <= 0.005} onClick={() => openPaymentForm(sale)}>Registrar pago</button></td></tr>)}</tbody></table></div></section>
+        <section className="sales-panel collections-panel"><div className="panel-heading"><div><h2>Historial de pagos</h2><p>Registro auditable de abonos recibidos.</p></div><span className="record-count">{customerPayments.length} pagos</span></div><div className="table-wrap collections-table"><table><thead><tr><th>Fecha</th><th>Factura</th><th>Cliente</th><th>Método</th><th>Referencia</th><th className="numeric">Monto</th><th>Notas</th></tr></thead><tbody>{customerPayments.map((payment) => { const sale = salesRows.find((row) => row.id === payment.saleId); return <tr key={payment.id}><td>{formatDate(payment.paymentDate)}</td><td>#{sale?.invoiceNumber || payment.saleId}</td><td>{payment.customer}</td><td>{payment.method}</td><td>{payment.reference || "N/A"}</td><td className="numeric strong-number">{money.format(payment.amount)}</td><td>{payment.notes || ""}</td></tr>; })}</tbody></table></div></section>
       </section>}
 
       {section === "administration" && <section className="erp-content">

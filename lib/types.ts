@@ -206,3 +206,16 @@ export type SellerLiquidation = {
   notes: string | null;
   createdAt?: string;
 };
+
+export type CustomerPayment = {
+  id: number;
+  organizationCode: string;
+  saleId: number;
+  customer: string;
+  paymentDate: string;
+  amount: number;
+  method: string;
+  reference: string | null;
+  notes: string | null;
+  createdAt?: string;
+};

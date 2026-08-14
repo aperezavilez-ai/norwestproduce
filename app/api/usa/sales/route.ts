@@ -301,7 +301,7 @@ export async function PATCH(request: Request) {
       if (!saleDate || !customer || !warehouse || !pickupNumber || (operationType === "DIRECT_RESALE" && !product)) {
         return Response.json({ error: "Completa fecha, cliente, bodega, PU# y producto." }, { status: 400 });
       }
-      const pickupDate = text(payload.pickupDate) || null;
+      const pickupDate = Object.prototype.hasOwnProperty.call(payload, "pickupDate") ? text(payload.pickupDate) || null : existing.pickupDate;
       const directItems = operationType === "DIRECT_RESALE" && Array.isArray(payload.items) ? (payload.items as InvoiceItem[]).map((item) => ({ product: String(item.product || "").trim(), presentation: item.presentation?.trim() || "", size: item.size?.trim() || "", label: item.label?.trim() || "", quantity: Number(item.quantity), purchasePrice: Number(item.purchasePrice), unitPrice: Number(item.unitPrice) })) : [];
       if (operationType === "DIRECT_RESALE" && (!directItems.length || directItems.length > 25 || directItems.some((item) => !item.product || !Number.isInteger(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.purchasePrice) || item.purchasePrice < 0 || !Number.isFinite(item.unitPrice) || item.unitPrice < 0))) {
         return Response.json({ error: "Revisa productos, bultos/cajas, precio de compra y precio de venta." }, { status: 400 });
@@ -470,7 +470,7 @@ export async function PATCH(request: Request) {
     }
     if (Array.isArray(payload.items)) {
       const items = payload.items as InvoiceItem[];
-      const validItems = items.length > 1 && items.length <= 25 && items.every((item) => typeof item.product === "string" && item.product.trim() && Number.isFinite(Number(item.quantity)) && Number(item.quantity) > 0 && Number.isFinite(Number(item.unitPrice)) && Number(item.unitPrice) >= 0);
+      const validItems = items.length >= 1 && items.length <= 25 && items.every((item) => typeof item.product === "string" && item.product.trim() && Number.isFinite(Number(item.quantity)) && Number(item.quantity) > 0 && Number.isFinite(Number(item.unitPrice)) && Number(item.unitPrice) >= 0);
       if (!validItems) return Response.json({ error: "Revisa los productos, bultos/cajas y precios de la carga." }, { status: 400 });
       const db = await getDb();
       const [existing] = await db.select().from(sales).where(and(eq(sales.id, id), eq(sales.organizationCode, "USA"))).limit(1);
